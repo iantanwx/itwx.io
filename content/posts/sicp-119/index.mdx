@@ -1,0 +1,59 @@
+---
+title: "SICP Exercise 1.19: Fibonacci Recursive Redux"
+date: 2019-10-25
+slug: "sicp-exercise-119-fibonacci-recursive-redux"
+tags:
+  - SICP
+  - Computer Science
+  - Recursion
+  - Time Complexity
+  - Lisp
+---
+
+Text: [SICP Section 1.2.4: Exponentiation](https://mitpress.mit.edu/sites/default/files/sicp/full-text/book/book-Z-H-11.html#%_sec_1.2.4)
+
+The Fibonacci sequence is a pretty common gateway drug into the world of recursion. While I don't recall when I learned what recursion is, I clearly recall learning about the Fibonacci sequence when I did.
+
+In the context of data structure an algorithms, it's also relatively common to encounter it as an introductory dynamic programming problem, especially to the memoization technique - I first encountered it 'attending' Eric Demaine's [excellent lectures](https://www.youtube.com/watch?v=OQ5jsbhAv_M) on DP.
+
+The main gist of this problem is the technique of successive squaring. For those of you who worked on crypto or crypto-related projects, this technique is pretty similar to the idea of [double and add](https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication): instead of increasing the exponent by one each time, keep squaring it and you halve the run time of any algorithm that involves exponentiation.
+
+The problem asks us to rewrite the fibonacci sequence in a logarithmic number of steps. At first, this sounds almost impossible: even in the DP case, time complexity is at least `O(n)`.
+
+Thankfully, the authors give us mortals a huge hint as a jumping off point. They frame the earlier transformation `T` from [section 1.2.2]() in exponential terms with the `n + 1` number being produced by running our transformation `n` times.
+
+They go on to state that we can apply the principle of successive squaring to our algorithm by using a transformation, let's call it `Tpq`, defined by:
+
+```
+a = bq + aq + ap
+b = bp + aq
+```
+
+and that `T` is actually an instance of `Tpq` with `p = 0` and `q = 1`. Substituting those values into the provided code yields the expected results. But that's not good enough - we have to frame our `p`s and `q`s recursively, as products of prior `p`s and `q`s.
+
+To do that we have to take a small trip back to elementary mathematics and the concept of factorisation. I did that on my iPad. Here are the goods:
+
+![notes](./scribbles.png)
+
+And, translating that into code, we have the final solution:
+
+```clojure {6,7}
+(defn fib-iter [a b p q count]
+  (cond (= count 0) b
+        (even? count)
+        (fib-iter a
+                  b
+                  (+ (* p p) (* q q))
+                  (+ (* q q) (* 2 q p))
+                  (/ count 2))
+        :else (fib-iter (+ (* b q) (* a q) (* a p))
+                        (+ (* b p) (* a q))
+                        p
+                        q
+                        (- count 1))))
+(defn fib [n]
+  (fib-iter 1 0 0 1 n))
+
+(fib 3)
+(fib 10)
+```
