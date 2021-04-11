@@ -1,13 +1,7 @@
 ---
 title: "SICP Exercise 1.19: Fibonacci Recursive Redux"
 date: 2019-10-25
-slug: "sicp-exercise-119-fibonacci-recursive-redux"
-tags:
-  - SICP
-  - Computer Science
-  - Recursion
-  - Time Complexity
-  - Lisp
+excerpt: The Fibonacci sequence is a pretty common gateway drug into the world of recursion. While I don't recall when I learned what recursion is, I clearly recall learning about the Fibonacci sequence when I did.
 ---
 
 Text: [SICP Section 1.2.4: Exponentiation](https://mitpress.mit.edu/sites/default/files/sicp/full-text/book/book-Z-H-11.html#%_sec_1.2.4)
@@ -33,7 +27,7 @@ and that `T` is actually an instance of `Tpq` with `p = 0` and `q = 1`. Substitu
 
 To do that we have to take a small trip back to elementary mathematics and the concept of factorisation. I did that on my iPad. Here are the goods:
 
-![notes](./scribbles.png)
+![notes](/sicp_119_scribbles.png)
 
 And, translating that into code, we have the final solution:
 

@@ -1,0 +1,213 @@
+---
+title: React Hydration Deep Dive
+date: 2021-05-09
+---
+
+Recently, at work, I was asked to dynamically show/hide a menu item because of certain (complex) business requirements. Due to a limitation of the internal tool ByteDance uses to manage menus in our massive front ends, I was forced to update the menu dynamically on mount.
+
+This caused a mysterious bug which caused a seemingly unrelated (but unfortunately very visible) `Breadcrumb` component to inherit an unexpected class name. This was not easy to debug. As you can see, React SSR error messages are not very helpful:
+
+![](/error_msg.png)
+
+Strangely, and to make matters worse, it could only be reproduced ~5-10% of the time. The bug was investigated by one of my erstwhile colleagues, who somehow figured out that swapping one of the HTML tags from `section` to `div` fixed the problem.
+
+But...the real question, to my mind, was **why** did it fix the problem? We knew that, at a high level, it was because the change caused the SSR DOM and the CSR DOM to match, but the exact reason for the initial bug was unknown. Since I could not let this go, I decided to spend a weekend diving deep into React SSR hydration.
+
+## How is a React App Mounted?
+
+The React reconciler is a well-understood algorithm, and many articles have been written about it, so we won't go through it in detail. We will just summarise the three main phases: the entry point, the work loop (render phase) and the commit phase.
+
+### Entry
+
+Hydration uses a separate entry point, but the process is largely the same as `ReactDOM.render`, except that the `hydrate` flag is set to `true`.
+
+-   [hydrate](https://github.com/iantanwx/react/blob/7df65725ba7826508e0f3c0f1c6f088efdbecfca/packages/react-dom/src/client/ReactDOMLegacy.js#L256)/render
+-   [legacyRenderSubtreeIntoContainer](https://github.com/iantanwx/react/blob/7df65725ba7826508e0f3c0f1c6f088efdbecfca/packages/react-dom/src/client/ReactDOMLegacy.js#L175) -> main entry point of hydrate and render
+-   ...
+-   [createFiberRoot](https://github.com/iantanwx/react/blob/dcd13045ef5d4e42bbda6ec2a493ac2ea507c018/packages/react-reconciler/src/ReactFiberRoot.old.js#L92) -> `root.hydrate = true`. Constucts the Fiber tree.
+-   [updateContainer](https://github.com/iantanwx/react/blob/b7085aad8f93db2050991f79553d1342db4bfa1d/packages/react-reconciler/src/ReactFiberReconciler.old.js#L262) -> starts the actual work.
+-   ...
+-   [performSyncWorkOnRoot](https://github.com/iantanwx/react/blob/f8ef4ff571db3de73b0bfab566c1ce9d69c6582f/packages/react-reconciler/src/ReactFiberWorkLoop.old.js#L957)
+-   [renderRootSync](https://github.com/iantanwx/react/blob/f8ef4ff571db3de73b0bfab566c1ce9d69c6582f/packages/react-reconciler/src/ReactFiberWorkLoop.old.js#L1419)
+-   [prepareFreshStack](https://github.com/iantanwx/react/blob/f8ef4ff571db3de73b0bfab566c1ce9d69c6582f/packages/react-reconciler/src/ReactFiberWorkLoop.old.js#L1228)-> initialise first `workInProgress`
+-   [workLoopSync](https://github.com/iantanwx/react/blob/f8ef4ff571db3de73b0bfab566c1ce9d69c6582f/packages/react-reconciler/src/ReactFiberWorkLoop.old.js#L1487) -> begin the render phase.
+
+`ReactDOM.render|hydrate` always starts off with `workLoopSync`. The entire render phase is completed in **one pass**. It is much less complicated than subsequent renders, which have to deal with Lanes and interruptions/re-entry.
+
+### Work Loop (sync)
+
+Although React does a lot of different optimisations, the work loop is a very simple and old algorithm - it is exactly like a call stack. Each Fiber corresponds to a stack frame, and "returns" to its parent Fiber after work on it is completed. This allows it to "park" work and re-enter later. The tree is traversed using a standard, plain old DFS, with work being "completed" in a bottom-up manner.
+
+At a high level, and in call order, the key functions are:
+
+-   [performUnitOfWork](https://github.com/iantanwx/react/blob/f8ef4ff571db3de73b0bfab566c1ce9d69c6582f/packages/react-reconciler/src/ReactFiberWorkLoop.old.js#L1571) -> called top-down for each Fiber until all Fibers have been visited.
+-   [beginWork](https://github.com/iantanwx/react/blob/782f689ca8380a715ab0c24e326fc293e5d25647/packages/react-reconciler/src/ReactFiberBeginWork.old.js#L3206) -> main work done here. This delegates to updateXXX depending on the type of the current `workInProgress`. When hydrating, it calls `tryToClaimNextHydratableInstance`. We'll return to this function later, as it's a key player in in hydration. 
+-   [completeUnitOfWork](http://v) -> called for each Fiber from the bottom-up. Calls `completeWork `and sets the `workInProgress` pointer to the next sibling if there is one and continues the loop.
+-   [completeWork](https://github.com/iantanwx/react/blob/7c1ba2b57d37df165da0f19c65ccc174866b5af7/packages/react-reconciler/src/ReactFiberCompleteWork.old.js#L787) -> creates/clones DOM/class instances where necessary. When hydrating, it calls `popHydrationState `to keep traversal of the DOM in sync with the work loop, and hydrates the corresponding DOM node (if there is one). It may also mutate the DOM directly by deleting hydratable orphan DOM nodes.
+
+### Commit
+
+The commit phase is where all effects enqueued during the work loop (render phase) are flushed to the DOM (i.e. insertions, updates, deletions). Hooks and lifecycle methods are also called in this phase. There are three sub-phases:
+
+-   [Pre-mutation phase](https://github.com/iantanwx/react/blob/e90c76a651a9889830f32256e2c2e2a408b713c5/packages/react-reconciler/src/ReactFiberCommitWork.old.js#L347)
+-   [Mutation phase](https://github.com/iantanwx/react/blob/e90c76a651a9889830f32256e2c2e2a408b713c5/packages/react-reconciler/src/ReactFiberCommitWork.old.js#L2129) - mutate host tree (DOM)
+-   [Layout phase](https://github.com/iantanwx/react/blob/f8ef4ff571db3de73b0bfab566c1ce9d69c6582f/packages/react-reconciler/src/ReactFiberWorkLoop.old.js#L1877) - flush all post-layout effects
+
+The commit phase does nothing interesting that's also related to hydration, so we won't go into detail here.
+
+### Further reading
+
+https://segmentfault.com/a/1190000039369644
+
+https://blog.logrocket.com/deep-dive-into-react-fiber-internals/
+
+https://indepth.dev/posts/1008/inside-fiber-in-depth-overview-of-the-new-reconciliation-algorithm-in-react
+
+## ReactDOM.mount vs ReactDOM.hydrate
+
+The call stacks/algorithm for these two are not very different. In fact, in both cases, React creates a **fresh fiber tree** in exactly the same way during the render phase. The difference is actually in the work loop functions `beginWork` and `completeWork`.
+
+-   During `beginWork` React will make a **best-effort** attempt to match a DOM node to the `workInProgress` Fiber and "claim" them.
+-   During `completeWork`, React does the actual hydration of the DOM nodes attached to each Fiber during the `beginWork` phase. It will also **delete** unclaimed hydratable DOM nodes.
+
+## How does React attach DOM nodes to Fibers?
+
+Earlier, I said that React attempts to "attach" a DOM node to the `stateNode` property of every `HostComponent` Fiber. This is done on a **best-effort** basis, using a simplistic algorithm that tries to match the tag property of the current Fiber to the tag of the current `nextHydratableInstance`. For example, a fiber with tag `div` will always match a DOM node with the same tag. Like the render phase, hydration has two phases.
+
+### Entry
+
+When calling `beginWork` on the root fiber, [`enterHydrationState`](https://github.com/iantanwx/react/blob/b7085aad8f93db2050991f79553d1342db4bfa1d/packages/react-reconciler/src/ReactFiberHydrationContext.old.js#L77) is called by `updateHostRoot`. This sets `nextHydratableInstance` to the **first child** of the root container passed to `ReactDOM.hydrate`.
+
+### Render
+
+When calling `beginWork` on a host component Fiber (div, p, etc), `updateHostComponent` calls [`tryToClaimNextHydratableInstance`](https://github.com/iantanwx/react/blob/b7085aad8f93db2050991f79553d1342db4bfa1d/packages/react-reconciler/src/ReactFiberHydrationContext.old.js#L261). The traversal of the DOM only happens via the first child or sibling of `nextHydratableInstance`. This treats the DOM as a singly-linked list. This mirrors the work loop, which treats the Fiber tree the same way.
+
+```flow js
+function tryToClaimNextHydratableInstance(fiber: Fiber): void {
+  if (!isHydrating) {
+    return;
+  }
+
+  let nextInstance = nextHydratableInstance;
+
+  if (!nextInstance) {
+    // Nothing to hydrate. Make it an insertion.
+    insertNonHydratedInstance((hydrationParentFiber: any), fiber);
+    isHydrating = false;
+    hydrationParentFiber = fiber;
+
+    return;
+  }
+
+  const firstAttemptedInstance = nextInstance;
+
+  if (!tryHydrate(fiber, nextInstance)) {
+    // If we can't hydrate this instance let's try the next one.
+    // We use this as a heuristic. It's based on intuition and not data so it
+    // might be flawed or unnecessary.
+    nextInstance = getNextHydratableSibling(firstAttemptedInstance);
+
+    if (!nextInstance || !tryHydrate(fiber, nextInstance)) {
+      // Nothing to hydrate. Make it an insertion.
+      insertNonHydratedInstance((hydrationParentFiber: any), fiber);
+      isHydrating = false;
+      hydrationParentFiber = fiber;
+
+      return;
+    }
+
+    // We matched the next one, we'll now assume that the first one was
+    // superfluous and we'll delete it. Since we can't eagerly delete it
+    // we'll have to schedule a deletion. To do that, this node needs a dummy
+    // fiber associated with it.
+    deleteHydratableInstance(
+      (hydrationParentFiber: any),
+      firstAttemptedInstance,
+    );
+
+  }
+
+  hydrationParentFiber = fiber;
+  nextHydratableInstance = getFirstHydratableChild((nextInstance: any));
+}
+```
+
+As you can see, this function will attempt to "claim" the sibling of `nextHydratableInstance` if it cannot be attached to the current `workInProgress`. This is what leads to unpredictable results when the SSR and CSR trees do not match.
+
+1.  Previously visited DOM nodes are scheduled for deletion (effect) once a matching sibling is found.
+1.  `nextHydratableInstance` may not be null even after we have finished `beginWork` on the current `workInProgress`, as it is set to the result of `getFirstHydratableChild(nextInstance)` if no matching DOM node or sibling is found in the previous steps. These are deleted in `completeWork`.
+
+It is very important to note that `tryHydrate` relies on `canHydrateInstance` to decide if it should hydrate a node. As you can see, it only checks for a match between the DOM node tag and the Fiber tag, and checks **no other attributes**:
+
+```flow js
+export function canHydrateInstance(
+  instance: HydratableInstance,
+  type: string,
+  props: Props,
+): null | Instance {
+  if (
+    instance.nodeType !== ELEMENT_NODE ||
+    type.toLowerCase() !== instance.nodeName.toLowerCase()
+  ) {
+    return null;
+  }
+  
+  // This has now been refined to an element node.
+  return ((instance: any): Instance);
+}
+```
+
+This means any given Fiber may hydrate an unexpected DOM node, and inherit all of its attributes, such as class names. This decision was taken for performance reasons. See https://github.com/facebook/react/issues/10189 and https://github.com/facebook/react/pull/10339 for background.
+
+## Reproducing the bug
+
+To make it easier to understand how the algorithm works, I created a toy app that reproduces the bug. Alternatively, you can also run a [test](https://github.com/iantanwx/react/blob/b7085aad8f93db2050991f79553d1342db4bfa1d/packages/react-dom/src/__tests__/ReactServerRenderingHydration-test.js#L627) I added to my React fork. Execute `yarn test -t "test hypothesis"` to skip other tests.
+
+https://codesandbox.io/s/friendly-frog-vbf5j?file=/src/index.js
+
+```jsx
+import ReactDOM from "react-dom";
+import ReactDOMServer from "react-dom/server";
+
+import "./styles.css";
+
+const markup = ReactDOMServer.renderToString(
+  <div>
+    <section>breadcrubms</section>
+    <div className="full-height">something else</div>
+  </div>
+);
+
+
+const rootElement = document.getElementById("root");
+rootElement.innerHTML = markup;
+
+ReactDOM.hydrate(
+  <div>
+    <div></div>
+    <section>totally different</section>
+  </div>,
+  rootElement
+);
+```
+
+What do you think the result will be when we run the app? Rendering a different tree on the client leads to unpredictable results. This is the result:
+
+```jsx
+ <div>
+  <div className="full-height"></div>
+  <section>totally different</section>
+</div>
+```
+
+***DIAGRAM***
+
+1.  The outer `<div />` is claimed, as the tags match.
+2.  The first child attempts to claim the `<section />`. It fails, and claims its sibling `<div className="full-height"/>`. `<section/>` is scheduled for deletion.
+3.  Since the final section fiber does not match the text breadcrumbs, it is scheduled for insertion. `nextHydratableInstance` remains pointing to breadcrumbs, which is deleted during `completeWork` (see: [`popHydrationState`](https://github.com/iantanwx/react/blob/b7085aad8f93db2050991f79553d1342db4bfa1d/packages/react-reconciler/src/ReactFiberHydrationContext.old.js#L441)).
+
+## How do we avoid this pitfall?
+
+In this case, the quickest fix would be to simply change section to div in our server-rendered app. This would allow the DOM to match, and eliminate the problem we see. However, in some cases, such a fix may not be possible.
+
+Secondly, it isn't the cleanest solution. Instead, we should **only change the application state after the initial mount**. This would allow the first render to take place normally. You can do this by, for example, using a `isMounted` flag or write/use a hook like [useMounted](https://gist.github.com/jaydenseric/a67cfb1b809b1b789daa17dfe6f83daa) and only perform side effects once the flag is true.
