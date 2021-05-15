@@ -7,6 +7,10 @@
   }
 </script>
 
+<script context="module">
+  export const prerender = true;
+</script>
+
 <style global lang="scss">
   code[class*="language-"],
   pre[class*="language-"] {
