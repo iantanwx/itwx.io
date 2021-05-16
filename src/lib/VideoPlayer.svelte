@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  let Player;
-  onMount(async () => {
-    const module = await import('svelte-video-player');
-    Player = module.default;
-  });
+  import Player from 'svelte-video-player'
+
+  let color = '#D95979'
+  let height;
+  let width;
+
   export let source;
 </script>
 
-{#if Player}
-  <Player {source} />
-{/if}
+<div class="my-2">
+  <Player {color} {height} {width} {source} />
+</div>
