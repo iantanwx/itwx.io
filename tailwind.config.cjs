@@ -25,8 +25,14 @@ module.exports = {
 		nightwind: {
 			typography: {
 				code: {
-					color: `${colors.gray[700]} !important`,
-				}
+					color: colors.gray[700],
+				},
+				'a code': {
+					color: colors.gray[700],
+				},
+        'a:hover': {
+          color: ACCENT,
+        },
 			},
 		},
 		extend: {
@@ -39,6 +45,9 @@ module.exports = {
 					css: {
 						a: {
 						  textDecoration: 'none',
+						},
+						'a code': {
+							color: colors.gray[700],
 						},
 						'a:hover': {
 							color: ACCENT,
