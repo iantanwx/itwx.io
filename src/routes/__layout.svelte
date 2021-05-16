@@ -1,5 +1,5 @@
 <script>
-  import '../styles/global.postcss';
+  import '../styles/global.scss';
   import Toggle from '$lib/Toggle.svelte';
 
   let dark = false;
