@@ -22,8 +22,8 @@
 		{#each posts as post}
 			<li class="py-5">
 				<div class="relative focus-within:ring-2 focus-within:ring-indigo-500">
-					<h3 class="text-lg font-semibold text-gray-800">
-						<a href="/posts/{post.slug}" class="hover:underline focus:outline-none hover:text-accent">
+					<h3 class="text-lg font-semibold text-gray-800 hover:underline focus:outline-none hover:text-accent">
+						<a href="/posts/{post.slug}">
 							<span class="absolute inset-0" aria-hidden="true"></span>
 							{post.title}
 						</a>
