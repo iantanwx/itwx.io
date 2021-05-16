@@ -224,9 +224,9 @@
 </svelte:head>
 
 <div>
-  <article class="prose prose-lg max-w-none text-gray-500">
+  <article class="prose prose-lg max-w-none text-gray-500 dark:text-gray-200">
     <h1>
-      <span class="block">{title}</span>
+      <span class="block text-gray-800 dark:text-gray-100">{title}</span>
       <span class="block mt-2 text-xl font-medium text-accent">{formatDate(date)}</span>
     </h1>
     <slot />
