@@ -25,7 +25,7 @@ module.exports = {
 		nightwind: {
 			typography: {
 				code: {
-					color: colors.gray[700],
+					color: `${colors.gray[700]} !important`,
 				}
 			},
 		},
